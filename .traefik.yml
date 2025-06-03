@@ -2,7 +2,7 @@ displayName: Wake on LAN
 type: middleware
 iconPath: .assets/icon.png
 
-import: github.com/MarkusJx/traefik-wol
+import: github.com/Tsagae/traefik-wol
 
 summary: 'Wake on LAN'
 

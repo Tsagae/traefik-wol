@@ -3,7 +3,8 @@ package traefik_wol
 import (
 	"context"
 	"fmt"
-	"github.com/MarkusJx/traefik-wol/wol"
+	"github.com/Tsagae/traefik-wol/wol"
+	"log"
 	"net"
 	"net/http"
 	"sync"
@@ -115,7 +116,7 @@ func New(_ context.Context, next http.Handler, config *Config, name string) (htt
 				return
 			}
 
-			fmt.Printf("Attempting to stop server at %s\n", config.StopUrl)
+			log.Printf("Attempting to stop server at %s\n", config.StopUrl)
 			switch config.StopMethod {
 			case "GET":
 				_, err = client.Get(config.StopUrl)
@@ -126,7 +127,7 @@ func New(_ context.Context, next http.Handler, config *Config, name string) (htt
 			}
 
 			if err != nil {
-				fmt.Printf("Error while stopping server: %s\n", err)
+				log.Printf("Error while stopping server: %s\n", err)
 			}
 		})
 	}
@@ -190,7 +191,7 @@ func ipFromInterface(iface string) (*net.UDPAddr, error) {
 
 func (a *Wol) wakeUp() error {
 	if len(a.startUrl) > 0 {
-		fmt.Printf("Attempting to start server at %s %s\n", a.startMethod, a.startUrl)
+		log.Printf("Attempting to start server at %s %s\n", a.startMethod, a.startUrl)
 		var err error
 		switch a.startMethod {
 		case "GET":
@@ -239,8 +240,8 @@ func (a *Wol) wakeUp() error {
 	}
 	defer conn.Close()
 
-	fmt.Printf("Attempting to send a magic packet to MAC %s\n", a.macAddress)
-	fmt.Printf("... Broadcasting to: %s\n", bcastAddr)
+	log.Printf("Attempting to send a magic packet to MAC %s\n", a.macAddress)
+	log.Printf("... Broadcasting to: %s\n", bcastAddr)
 	n, err := conn.Write(bs)
 	if err == nil && n != 102 {
 		err = fmt.Errorf("magic packet sent was %d bytes (expected 102 bytes sent)", n)
@@ -256,7 +257,7 @@ func (a *Wol) serviceIsAlive() bool {
 	fmt.Println("Checking if server is up")
 	_, err := a.client.Get(a.healthCheck)
 	if err != nil {
-		fmt.Printf("Server is down: %s", err)
+		log.Printf("Server is down: %s", err)
 		return false
 	}
 

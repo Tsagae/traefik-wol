@@ -13,7 +13,7 @@ api:
 experimental:
   localPlugins:
     wol:
-      moduleName: github.com/MarkusJx/traefik-wol
+      moduleName: github.com/Tsagae/traefik-wol
       #version: v0.2.1
 
 providers:
