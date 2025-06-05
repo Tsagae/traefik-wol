@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/MarkusJx/traefik-wol/wol"
+	"log"
 	"net"
 	"net/http"
 	"sync"
@@ -107,15 +108,15 @@ func New(_ context.Context, next http.Handler, config *Config, name string) (htt
 
 	var sleepTimer *time.Timer
 	if len(config.StopUrl) > 0 {
-		fmt.Println("Starting sleep timer")
+		log.Println("Starting sleep timer")
 		sleepTimer = time.AfterFunc(time.Duration(config.StopTimeout)*time.Minute, func() {
 			_, err := client.Get(config.HealthCheck)
 			if err != nil {
-				fmt.Println("Server is already stopped")
+				log.Println("Server is already stopped")
 				return
 			}
 
-			fmt.Printf("Attempting to stop server at %s\n", config.StopUrl)
+			log.Printf("Attempting to stop server at %s\n", config.StopUrl)
 			switch config.StopMethod {
 			case "GET":
 				_, err = client.Get(config.StopUrl)
@@ -126,7 +127,7 @@ func New(_ context.Context, next http.Handler, config *Config, name string) (htt
 			}
 
 			if err != nil {
-				fmt.Printf("Error while stopping server: %s\n", err)
+				log.Printf("Error while stopping server: %s\n", err)
 			}
 		})
 	}
@@ -154,7 +155,7 @@ func New(_ context.Context, next http.Handler, config *Config, name string) (htt
 func (a *Wol) resetTimer() {
 	a.timerMutex.Lock()
 	if a.sleepTimer != nil {
-		fmt.Println("Resetting sleep timer")
+		log.Println("Resetting sleep timer")
 		a.sleepTimer.Reset(time.Duration(a.stopTimeout) * time.Minute)
 	}
 	a.timerMutex.Unlock()
@@ -190,7 +191,7 @@ func ipFromInterface(iface string) (*net.UDPAddr, error) {
 
 func (a *Wol) wakeUp() error {
 	if len(a.startUrl) > 0 {
-		fmt.Printf("Attempting to start server at %s %s\n", a.startMethod, a.startUrl)
+		log.Printf("Attempting to start server at %s %s\n", a.startMethod, a.startUrl)
 		var err error
 		switch a.startMethod {
 		case "GET":
@@ -239,8 +240,8 @@ func (a *Wol) wakeUp() error {
 	}
 	defer conn.Close()
 
-	fmt.Printf("Attempting to send a magic packet to MAC %s\n", a.macAddress)
-	fmt.Printf("... Broadcasting to: %s\n", bcastAddr)
+	log.Printf("Attempting to send a magic packet to MAC %s\n", a.macAddress)
+	log.Printf("... Broadcasting to: %s\n", bcastAddr)
 	n, err := conn.Write(bs)
 	if err == nil && n != 102 {
 		err = fmt.Errorf("magic packet sent was %d bytes (expected 102 bytes sent)", n)
@@ -253,31 +254,31 @@ func (a *Wol) wakeUp() error {
 }
 
 func (a *Wol) serviceIsAlive() bool {
-	fmt.Println("Checking if server is up")
+	log.Println("Checking if server is up")
 	_, err := a.client.Get(a.healthCheck)
 	if err != nil {
-		fmt.Printf("Server is down: %s", err)
+		log.Printf("Server is down: %s", err)
 		return false
 	}
 
-	fmt.Println("Server is up")
+	log.Println("Server is up")
 	return true
 }
 
 func (a *Wol) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	a.resetTimer()
 	if !a.serviceIsAlive() {
-		fmt.Println("Server is down, waking up")
+		log.Println("Server is down, waking up")
 		err := a.wakeUp()
 		if err != nil {
 			http.Error(rw, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		fmt.Println("Waiting for server to come up")
+		log.Println("Waiting for server to come up")
 		for i := 0; i < a.numRetries; i++ {
 			if a.serviceIsAlive() {
-				fmt.Println("Server is up")
+				log.Println("Server is up")
 				break
 			}
 
