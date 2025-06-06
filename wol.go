@@ -28,7 +28,6 @@ const (
 // Config the plugin configuration.
 type Config struct {
 	MacAddress         string `json:"macAddress,omitempty"`
-	IpAddress          string `json:"ipAddress,omitempty"`
 	StartUrl           string `json:"startUrl,omitempty"`
 	StartMethod        string `json:"startMethod,omitempty"`
 	StopUrl            string `json:"stopUrl,omitempty"`
@@ -44,7 +43,6 @@ type Config struct {
 func CreateConfig() *Config {
 	return &Config{
 		MacAddress:         "",
-		IpAddress:          "",
 		HealthCheck:        "",
 		StartUrl:           "",
 		StartMethod:        "GET",
@@ -69,17 +67,13 @@ type Wol struct {
 }
 
 // New created a new Demo plugin.
-func New(_ context.Context, next http.Handler, config *Config, name string) (http.Handler, error) {
+func New(_ context.Context, next http.Handler, config *Config, _ string) (http.Handler, error) {
 	if len(config.HealthCheck) == 0 {
 		return nil, fmt.Errorf("healthCheck cannot be empty")
 	}
 
-	if (len(config.MacAddress) > 0 && len(config.IpAddress) == 0) || (len(config.MacAddress) == 0 && len(config.IpAddress) > 0) {
-		return nil, fmt.Errorf("if mac or ip is set, the other must be set too")
-	}
-
-	if len(config.MacAddress) == 0 && len(config.IpAddress) == 0 && len(config.StartUrl) == 0 {
-		return nil, fmt.Errorf("either mac and ip or startUrl must be set")
+	if len(config.MacAddress) == 0 && len(config.StartUrl) == 0 {
+		return nil, fmt.Errorf("either mac or startUrl must be set")
 	}
 
 	if len(config.StartUrl) > 0 && len(config.MacAddress) > 0 {
