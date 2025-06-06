@@ -138,7 +138,6 @@ func New(_ context.Context, next http.Handler, config *Config, _ string) (http.H
 			log.Printf("Server is down: %s", err)
 			return false, nil
 		}
-
 		log.Println("Server is up")
 		return true, nil
 	}
@@ -298,7 +297,7 @@ func (a *Wol) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	}
 	if !isAlive {
 		log.Println("Server is down, waking up")
-		err := a.wakeUpAction()
+		err = a.wakeUpAction()
 		if err != nil {
 			http.Error(rw, err.Error(), http.StatusInternalServerError)
 			return
@@ -306,7 +305,7 @@ func (a *Wol) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 		log.Println("Waiting for server to come up")
 		for i := 0; i < a.numRetries; i++ {
-			isAlive, err := a.healthCheckAction()
+			isAlive, err = a.healthCheckAction()
 			if err != nil {
 				log.Printf("Error while checking server status: %s\n", err)
 			}
@@ -318,10 +317,6 @@ func (a *Wol) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 			time.Sleep(5 * time.Second)
 		}
 
-		isAlive, err := a.healthCheckAction()
-		if err != nil {
-			log.Printf("Error while checking server status: %s\n", err)
-		}
 		if !isAlive {
 			http.Error(rw, "Failed to start server", http.StatusInternalServerError)
 			return
