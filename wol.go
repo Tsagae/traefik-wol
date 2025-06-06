@@ -8,8 +8,21 @@ import (
 	"net"
 	"net/http"
 	"sync"
-	"text/template"
 	"time"
+)
+
+type HttpMethod int
+
+const (
+	GET HttpMethod = iota
+	POST
+)
+
+type StartActionType int
+
+const (
+	HTTP StartActionType = iota
+	MAGICPACKET
 )
 
 // Config the plugin configuration.
@@ -46,22 +59,13 @@ func CreateConfig() *Config {
 
 // Wol a Demo plugin.
 type Wol struct {
-	next               http.Handler
-	macAddress         string
-	ipAddress          string
-	startUrl           string
-	startMethod        string
-	stopUrl            string
-	healthCheck        string
-	name               string
-	broadcastInterface string
-	stopMethod         string
-	stopTimeout        int
-	numRetries         int
-	client             *http.Client
-	sleepTimer         *time.Timer
-	timerMutex         *sync.Mutex
-	template           *template.Template
+	next              http.Handler
+	stopTimeout       time.Duration
+	numRetries        int
+	sleepTimer        *time.Timer
+	timerMutex        *sync.Mutex
+	wakeUpAction      func() error
+	healthCheckAction func() (bool, error)
 }
 
 // New created a new Demo plugin.
@@ -70,7 +74,7 @@ func New(_ context.Context, next http.Handler, config *Config, name string) (htt
 		return nil, fmt.Errorf("healthCheck cannot be empty")
 	}
 
-	if len(config.MacAddress) > 0 && len(config.IpAddress) == 0 || len(config.MacAddress) == 0 && len(config.IpAddress) > 0 {
+	if (len(config.MacAddress) > 0 && len(config.IpAddress) == 0) || (len(config.MacAddress) == 0 && len(config.IpAddress) > 0) {
 		return nil, fmt.Errorf("if mac or ip is set, the other must be set too")
 	}
 
@@ -106,24 +110,76 @@ func New(_ context.Context, next http.Handler, config *Config, name string) (htt
 		Timeout: time.Duration(config.RequestTimeout) * time.Second,
 	}
 
-	var sleepTimer *time.Timer
+	var startActionType StartActionType
+	var startHttpMethod HttpMethod
+	if len(config.StartUrl) > 0 {
+		startActionType = HTTP
+		switch config.StartMethod {
+		case "GET":
+			startHttpMethod = GET
+		case "POST":
+			startHttpMethod = POST
+		default:
+			return nil, fmt.Errorf("startMethod must be either GET or POST")
+		}
+	} else {
+		startActionType = MAGICPACKET
+	}
+
+	var w = Wol{
+		next:              next,
+		stopTimeout:       time.Duration(config.StopTimeout) * time.Minute,
+		sleepTimer:        nil,
+		numRetries:        config.NumRetries,
+		timerMutex:        &sync.Mutex{},
+		healthCheckAction: nil,
+		wakeUpAction:      nil,
+	}
+
+	// Health Check Action
+	w.healthCheckAction = func() (bool, error) {
+		log.Println("Checking if server is up")
+		_, err := client.Get(config.HealthCheck)
+		if err != nil {
+			log.Printf("Server is down: %s", err)
+			return false, nil
+		}
+
+		log.Println("Server is up")
+		return true, nil
+	}
+
+	// Stop Action
 	if len(config.StopUrl) > 0 {
+		var stopHttpMethod HttpMethod
+		switch config.StopMethod {
+		case "GET":
+			stopHttpMethod = GET
+		case "POST":
+			stopHttpMethod = POST
+		default:
+			return nil, fmt.Errorf("stopMethod must be either GET or POST")
+		}
+
 		log.Println("Starting sleep timer")
-		sleepTimer = time.AfterFunc(time.Duration(config.StopTimeout)*time.Minute, func() {
-			_, err := client.Get(config.HealthCheck)
+		w.sleepTimer = time.AfterFunc(w.stopTimeout, func() {
+			log.Printf("Attempting to stop server at %s\n", config.StopUrl)
+
+			var err error
+			isAlive, err := w.healthCheckAction()
 			if err != nil {
+				log.Printf("Error while checking server status: %s\n", err)
+			}
+			if !isAlive {
 				log.Println("Server is already stopped")
 				return
 			}
 
-			log.Printf("Attempting to stop server at %s\n", config.StopUrl)
-			switch config.StopMethod {
-			case "GET":
+			switch stopHttpMethod {
+			case GET:
 				_, err = client.Get(config.StopUrl)
-			case "POST":
+			case POST:
 				_, err = client.Post(config.StopUrl, "application/json", nil)
-			default:
-				err = fmt.Errorf("unknown stop method: %s", config.StopMethod)
 			}
 
 			if err != nil {
@@ -132,33 +188,85 @@ func New(_ context.Context, next http.Handler, config *Config, name string) (htt
 		})
 	}
 
-	return &Wol{
-		healthCheck:        config.HealthCheck,
-		macAddress:         config.MacAddress,
-		ipAddress:          config.IpAddress,
-		startUrl:           config.StartUrl,
-		startMethod:        config.StartMethod,
-		stopUrl:            config.StopUrl,
-		next:               next,
-		name:               name,
-		broadcastInterface: config.BroadcastInterface,
-		stopMethod:         config.StopMethod,
-		stopTimeout:        config.StopTimeout,
-		sleepTimer:         sleepTimer,
-		client:             client,
-		numRetries:         config.NumRetries,
-		timerMutex:         &sync.Mutex{},
-		template:           template.New("wol").Delims("[[", "]]"),
-	}, nil
+	// Start Action
+	var startAction func() error
+	switch startActionType {
+	case HTTP:
+		startAction = func() error {
+			log.Printf("Attempting to start server at %s %s\n", config.StartMethod, config.StartUrl)
+			var err error
+			switch startHttpMethod {
+			case GET:
+				_, err = http.Get(config.StartUrl)
+			case POST:
+				_, err = http.Post(config.StartUrl, "text/plain", nil)
+			default:
+				err = fmt.Errorf("unknown start method: %s", config.StartMethod)
+			}
+			return err
+		}
+	case MAGICPACKET:
+		startAction = func() error {
+			var localAddr *net.UDPAddr
+			var err error
+			if len(config.BroadcastInterface) > 0 {
+				localAddr, err = ipFromInterface(config.BroadcastInterface)
+				if err != nil {
+					return err
+				}
+			}
+
+			bcastAddr := fmt.Sprintf("%s:%s", "255.255.255.255", "9")
+			udpAddr, err := net.ResolveUDPAddr("udp", bcastAddr)
+			if err != nil {
+				return err
+			}
+
+			mp, err := wol.New(config.MacAddress)
+			if err != nil {
+				return err
+			}
+
+			bs, err := mp.Marshal()
+			if err != nil {
+				return err
+			}
+
+			conn, err := net.DialUDP("udp", localAddr, udpAddr)
+			if err != nil {
+				return err
+			}
+			defer func(conn *net.UDPConn) {
+				err := conn.Close()
+				if err != nil {
+					log.Printf("Error closing UDP connection: %s\n", err)
+				}
+			}(conn)
+
+			log.Printf("Attempting to send a magic packet to MAC %s\n", config.MacAddress)
+			log.Printf("... Broadcasting to: %s\n", bcastAddr)
+			n, err := conn.Write(bs)
+			if err == nil && n != 102 {
+				err = fmt.Errorf("magic packet sent was %d bytes (expected 102 bytes sent)", n)
+			}
+			if err != nil {
+				return err
+			}
+			return nil
+
+		}
+	}
+	w.wakeUpAction = startAction
+	return &w, nil
 }
 
 func (a *Wol) resetTimer() {
-	a.timerMutex.Lock()
 	if a.sleepTimer != nil {
+		a.timerMutex.Lock()
 		log.Println("Resetting sleep timer")
-		a.sleepTimer.Reset(time.Duration(a.stopTimeout) * time.Minute)
+		a.sleepTimer.Reset(a.stopTimeout)
+		a.timerMutex.Unlock()
 	}
-	a.timerMutex.Unlock()
 }
 
 func ipFromInterface(iface string) (*net.UDPAddr, error) {
@@ -189,87 +297,14 @@ func ipFromInterface(iface string) (*net.UDPAddr, error) {
 	return nil, fmt.Errorf("no address associated with interface %s", iface)
 }
 
-func (a *Wol) wakeUp() error {
-	if len(a.startUrl) > 0 {
-		log.Printf("Attempting to start server at %s %s\n", a.startMethod, a.startUrl)
-		var err error
-		switch a.startMethod {
-		case "GET":
-			_, err = http.Get(a.startUrl)
-		case "POST":
-			_, err = http.Post(a.startUrl, "text/plain", nil)
-		default:
-			err = fmt.Errorf("unknown start method: %s", a.startMethod)
-		}
-
-		if err != nil {
-			return err
-		}
-
-		return nil
-	}
-
-	var localAddr *net.UDPAddr
-	var err error
-	if len(a.broadcastInterface) > 0 {
-		localAddr, err = ipFromInterface(a.broadcastInterface)
-		if err != nil {
-			return err
-		}
-	}
-
-	bcastAddr := fmt.Sprintf("%s:%s", "255.255.255.255", "9")
-	udpAddr, err := net.ResolveUDPAddr("udp", bcastAddr)
-	if err != nil {
-		return err
-	}
-
-	mp, err := wol.New(a.macAddress)
-	if err != nil {
-		return err
-	}
-
-	bs, err := mp.Marshal()
-	if err != nil {
-		return err
-	}
-
-	conn, err := net.DialUDP("udp", localAddr, udpAddr)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	log.Printf("Attempting to send a magic packet to MAC %s\n", a.macAddress)
-	log.Printf("... Broadcasting to: %s\n", bcastAddr)
-	n, err := conn.Write(bs)
-	if err == nil && n != 102 {
-		err = fmt.Errorf("magic packet sent was %d bytes (expected 102 bytes sent)", n)
-	}
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (a *Wol) serviceIsAlive() bool {
-	log.Println("Checking if server is up")
-	_, err := a.client.Get(a.healthCheck)
-	if err != nil {
-		log.Printf("Server is down: %s", err)
-		return false
-	}
-
-	log.Println("Server is up")
-	return true
-}
-
 func (a *Wol) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
-	a.resetTimer()
-	if !a.serviceIsAlive() {
+	isAlive, err := a.healthCheckAction()
+	if err != nil {
+		log.Printf("Error while checking server status: %s\n", err)
+	}
+	if !isAlive {
 		log.Println("Server is down, waking up")
-		err := a.wakeUp()
+		err := a.wakeUpAction()
 		if err != nil {
 			http.Error(rw, err.Error(), http.StatusInternalServerError)
 			return
@@ -277,7 +312,11 @@ func (a *Wol) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 		log.Println("Waiting for server to come up")
 		for i := 0; i < a.numRetries; i++ {
-			if a.serviceIsAlive() {
+			isAlive, err := a.healthCheckAction()
+			if err != nil {
+				log.Printf("Error while checking server status: %s\n", err)
+			}
+			if isAlive {
 				log.Println("Server is up")
 				break
 			}
@@ -285,7 +324,11 @@ func (a *Wol) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 			time.Sleep(5 * time.Second)
 		}
 
-		if !a.serviceIsAlive() {
+		isAlive, err := a.healthCheckAction()
+		if err != nil {
+			log.Printf("Error while checking server status: %s\n", err)
+		}
+		if !isAlive {
 			http.Error(rw, "Failed to start server", http.StatusInternalServerError)
 			return
 		}
