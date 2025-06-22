@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/MarkusJx/traefik-wol/wol"
-	"log"
 	"net"
 	"net/http"
 	"sync"
@@ -132,13 +131,13 @@ func New(_ context.Context, next http.Handler, config *Config, _ string) (http.H
 
 	// Health Check Action
 	w.healthCheckAction = func() (bool, error) {
-		log.Println("Checking if server is up")
+		log(DEBUG, "Checking if server is up")
 		_, err := client.Get(config.HealthCheck)
 		if err != nil {
-			log.Printf("Server is down: %s", err)
+			logWithError(DEBUG, "Server is down", err)
 			return false, nil
 		}
-		log.Println("Server is up")
+		log(DEBUG, "Server is up")
 		return true, nil
 	}
 
@@ -154,17 +153,17 @@ func New(_ context.Context, next http.Handler, config *Config, _ string) (http.H
 			return nil, fmt.Errorf("stopMethod must be either GET or POST")
 		}
 
-		log.Println("Starting sleep timer")
+		log(DEBUG, "Starting sleep timer")
 		w.sleepTimer = time.AfterFunc(w.stopTimeout, func() {
-			log.Printf("Attempting to stop server at %s\n", config.StopUrl)
+			log(DEBUG, fmt.Sprintf("Attempting to stop server at %s\n", config.StopUrl))
 
 			var err error
 			isAlive, err := w.healthCheckAction()
 			if err != nil {
-				log.Printf("Error while checking server status: %s\n", err)
+				logWithError(ERROR, "Error while checking server status", err)
 			}
 			if !isAlive {
-				log.Println("Server is already stopped")
+				log(DEBUG, "Server is already stopped")
 				return
 			}
 
@@ -176,7 +175,7 @@ func New(_ context.Context, next http.Handler, config *Config, _ string) (http.H
 			}
 
 			if err != nil {
-				log.Printf("Error while stopping server: %s\n", err)
+				logWithError(ERROR, "Error while stopping server", err)
 			}
 		})
 	}
@@ -186,7 +185,7 @@ func New(_ context.Context, next http.Handler, config *Config, _ string) (http.H
 	switch startActionType {
 	case HTTP:
 		startAction = func() error {
-			log.Printf("Attempting to start server at %s %s\n", config.StartMethod, config.StartUrl)
+			log(DEBUG, fmt.Sprintf("Attempting to start server at %s %s", config.StartMethod, config.StartUrl))
 			var err error
 			switch startHttpMethod {
 			case GET:
@@ -232,12 +231,12 @@ func New(_ context.Context, next http.Handler, config *Config, _ string) (http.H
 			defer func(conn *net.UDPConn) {
 				err := conn.Close()
 				if err != nil {
-					log.Printf("Error closing UDP connection: %s\n", err)
+					logWithError(ERROR, "Error closing UDP connection", err)
 				}
 			}(conn)
 
-			log.Printf("Attempting to send a magic packet to MAC %s\n", config.MacAddress)
-			log.Printf("... Broadcasting to: %s\n", bcastAddr)
+			log(DEBUG, fmt.Sprintf("Attempting to send a magic packet to MAC %s", config.MacAddress))
+			log(DEBUG, fmt.Sprintf("... Broadcasting to: %s", bcastAddr))
 			n, err := conn.Write(bs)
 			if err == nil && n != 102 {
 				err = fmt.Errorf("magic packet sent was %d bytes (expected 102 bytes sent)", n)
@@ -256,7 +255,7 @@ func New(_ context.Context, next http.Handler, config *Config, _ string) (http.H
 func (a *Wol) resetTimer() {
 	if a.sleepTimer != nil {
 		a.timerMutex.Lock()
-		log.Println("Resetting sleep timer")
+		log(DEBUG, "Resetting sleep timer")
 		a.sleepTimer.Reset(a.stopTimeout)
 		a.timerMutex.Unlock()
 	}
@@ -293,24 +292,24 @@ func ipFromInterface(iface string) (*net.UDPAddr, error) {
 func (a *Wol) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	isAlive, err := a.healthCheckAction()
 	if err != nil {
-		log.Printf("Error while checking server status: %s\n", err)
+		logWithError(ERROR, "Error while checking server status", err)
 	}
 	if !isAlive {
-		log.Println("Server is down, waking up")
+		log(DEBUG, "Server is down, waking up")
 		err = a.wakeUpAction()
 		if err != nil {
 			http.Error(rw, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		log.Println("Waiting for server to come up")
+		log(DEBUG, "Waiting for server to come up")
 		for i := 0; i < a.numRetries; i++ {
 			isAlive, err = a.healthCheckAction()
 			if err != nil {
-				log.Printf("Error while checking server status: %s\n", err)
+				logWithError(ERROR, "Error while checking server status", err)
 			}
 			if isAlive {
-				log.Println("Server is up")
+				log(DEBUG, "Server is up")
 				break
 			}
 
