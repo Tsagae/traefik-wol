@@ -296,14 +296,15 @@ func (a *Wol) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	}
 	if !isAlive {
 		log(DEBUG, "Server is down, waking up")
-		err = a.wakeUpAction()
-		if err != nil {
-			http.Error(rw, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		log(DEBUG, "Waiting for server to come up")
 		for i := 0; i < a.numRetries; i++ {
+			err = a.wakeUpAction()
+			if err != nil {
+				http.Error(rw, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			log(DEBUG, "Waiting for server to come up")
+			time.Sleep(5 * time.Second)
+
 			isAlive, err = a.healthCheckAction()
 			if err != nil {
 				logWithError(ERROR, "Error while checking server status", err)
@@ -312,8 +313,6 @@ func (a *Wol) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 				log(DEBUG, "Server is up")
 				break
 			}
-
-			time.Sleep(5 * time.Second)
 		}
 
 		if !isAlive {
